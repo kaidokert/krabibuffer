@@ -48,6 +48,15 @@ class KrabiBuffer:
         self._shm = shared_memory.SharedMemory(name=actual_name, create=False)
         self._buf = self._shm.buf
 
+        slot_count = struct.unpack_from("=Q", self._buf, self._OFFSET_SLOT_COUNT)[0]
+        stride = struct.unpack_from("=Q", self._buf, self._OFFSET_STRIDE)[0]
+        if slot_count < 2:
+            self._shm.close()
+            raise ValueError(f"invalid slot_count={slot_count}, must be >= 2")
+        if stride == 0:
+            self._shm.close()
+            raise ValueError("invalid stride=0, must be > 0")
+
     def close(self):
         """Detach from the shared memory region."""
         self._shm.close()

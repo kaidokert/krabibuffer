@@ -1,6 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 /// A lock-free, single-producer/single-consumer ring buffer with a stable
 /// `repr(C)` memory layout suitable for cross-language shared memory IPC.
@@ -28,29 +29,37 @@ pub struct KrabiBuffer<const N: usize> {
     pub magic: u8,
 
     /// Total number of slots (`N / stride`).
-    slot_count: usize,
+    slot_count: u64,
 
     /// Byte size of each element in the queue.
-    stride: usize,
+    stride: u64,
 
     /// Index of the next element to dequeue (0 <= head < slot_count).
-    head: AtomicUsize,
+    head: AtomicU64,
 
     /// Index of the next element to enqueue (0 <= tail < slot_count).
-    tail: AtomicUsize,
+    tail: AtomicU64,
 
     /// Raw byte storage for all slots.
-    buffer: [u8; N],
+    /// Wrapped in `UnsafeCell` to allow `&self` access from both
+    /// producer (enqueue) and consumer (dequeue) in SPSC usage.
+    buffer: UnsafeCell<[u8; N]>,
 }
 
 #[derive(Debug)]
 pub enum Error {
     StrideIsZero,
     StrideNotEvenlyDivisible,
+    SlotCountTooSmall,
     QueueFull,
     QueueEmpty,
     InvalidDataLength,
 }
+
+// SAFETY: KrabiBuffer is designed for single-producer/single-consumer use.
+// The producer and consumer access disjoint slots, synchronized via atomic
+// head/tail indices with acquire/release ordering.
+unsafe impl<const N: usize> Sync for KrabiBuffer<N> {}
 
 impl<const N: usize> KrabiBuffer<N> {
     /// Create a new buffer.
@@ -64,35 +73,38 @@ impl<const N: usize> KrabiBuffer<N> {
         if N % stride != 0 {
             return Err(Error::StrideNotEvenlyDivisible);
         }
-        let slot_count = N / stride;
+        let slot_count = (N / stride) as u64;
+        if slot_count < 2 {
+            return Err(Error::SlotCountTooSmall);
+        }
 
         Ok(Self {
             // Lower nibble encodes pointer width: 0..3 for 8/16/32/64.
             magic: 0xC0 | (usize::BITS.trailing_zeros() - 3) as u8,
 
             slot_count,
-            stride,
+            stride: stride as u64,
 
-            head: AtomicUsize::new(0),
-            tail: AtomicUsize::new(0),
+            head: AtomicU64::new(0),
+            tail: AtomicU64::new(0),
 
-            buffer: [0; N],
+            buffer: UnsafeCell::new([0; N]),
         })
     }
 
     /// Usable capacity: `slot_count - 1`.
     /// One slot is always held open to distinguish full from empty.
     #[inline]
-    pub fn capacity(&self) -> usize {
+    pub fn capacity(&self) -> u64 {
         self.slot_count - 1
     }
 
     /// Current number of occupied slots.
     #[inline]
-    pub fn len(&self) -> usize {
+    pub fn len(&self) -> u64 {
         let head = self.head.load(Ordering::Relaxed);
         let tail = self.tail.load(Ordering::Relaxed);
-        (tail.wrapping_sub(head) + self.slot_count) % self.slot_count
+        (tail.wrapping_sub(head).wrapping_add(self.slot_count)) % self.slot_count
     }
 
     /// Whether the buffer is empty.
@@ -102,13 +114,13 @@ impl<const N: usize> KrabiBuffer<N> {
     }
 
     #[inline]
-    fn increment(&self, slot: usize) -> usize {
+    fn increment(&self, slot: u64) -> u64 {
         (slot + 1) % self.slot_count
     }
 
     /// Enqueue `data` (must be exactly `stride` bytes).
-    pub fn enqueue(&mut self, data: &[u8]) -> Result<(), Error> {
-        if data.len() != self.stride {
+    pub fn enqueue(&self, data: &[u8]) -> Result<(), Error> {
+        if data.len() as u64 != self.stride {
             return Err(Error::InvalidDataLength);
         }
 
@@ -116,8 +128,13 @@ impl<const N: usize> KrabiBuffer<N> {
         let next_tail = self.increment(current_tail);
 
         if next_tail != self.head.load(Ordering::Acquire) {
-            let offset = current_tail * self.stride;
-            self.buffer[offset..(offset + self.stride)].copy_from_slice(data);
+            let offset = (current_tail * self.stride) as usize;
+            let stride = self.stride as usize;
+            // SAFETY: In SPSC usage the producer exclusively owns the slot at
+            // `current_tail`, so no data race with the consumer.
+            unsafe {
+                (&mut *self.buffer.get())[offset..(offset + stride)].copy_from_slice(data);
+            }
             self.tail.store(next_tail, Ordering::Release);
             Ok(())
         } else {
@@ -127,7 +144,7 @@ impl<const N: usize> KrabiBuffer<N> {
 
     /// Dequeue into `out` (must be exactly `stride` bytes).
     pub fn dequeue<'a>(&self, out: &'a mut [u8]) -> Result<&'a mut [u8], Error> {
-        if out.len() != self.stride {
+        if out.len() as u64 != self.stride {
             return Err(Error::InvalidDataLength);
         }
 
@@ -135,8 +152,13 @@ impl<const N: usize> KrabiBuffer<N> {
         if current_head == self.tail.load(Ordering::Acquire) {
             Err(Error::QueueEmpty)
         } else {
-            let offset = current_head * self.stride;
-            out.copy_from_slice(&self.buffer[offset..(offset + self.stride)]);
+            let offset = (current_head * self.stride) as usize;
+            let stride = self.stride as usize;
+            // SAFETY: In SPSC usage the consumer exclusively owns the slot at
+            // `current_head`, so no data race with the producer.
+            unsafe {
+                out.copy_from_slice(&(&*self.buffer.get())[offset..(offset + stride)]);
+            }
 
             let next_head = self.increment(current_head);
             self.head.store(next_head, Ordering::Release);
@@ -151,8 +173,7 @@ mod tests {
 
     #[test]
     fn test_buffer_size() {
-        let buf = KrabiBuffer::<4>::new(2);
-        assert_eq!(size_of_val(&buf), 56);
+        assert_eq!(core::mem::size_of::<KrabiBuffer<4>>(), 48);
     }
 
     #[test]
@@ -161,13 +182,13 @@ mod tests {
         let buf = KrabiBuffer::<4>::new(stride).unwrap();
 
         assert_eq!(buf.magic & 0xF0, 0xC0);
-        assert_eq!(buf.slot_count, 4 / stride);
-        assert_eq!(buf.stride, stride);
+        assert_eq!(buf.slot_count, (4 / stride) as u64);
+        assert_eq!(buf.stride, stride as u64);
         assert_eq!(buf.head.load(Ordering::Relaxed), 0);
         assert_eq!(buf.tail.load(Ordering::Relaxed), 0);
         assert_eq!(buf.len(), 0);
         assert!(buf.is_empty());
-        assert_eq!(buf.capacity(), (4 / stride) - 1);
+        assert_eq!(buf.capacity(), (4 / stride) as u64 - 1);
     }
 
     #[test]
@@ -184,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_enqueue_dequeue() {
-        let mut buf = KrabiBuffer::<6>::new(2).unwrap();
+        let buf = KrabiBuffer::<6>::new(2).unwrap();
         let data1 = [1, 2];
         let data2 = [3, 4];
         let mut out = [0, 0];
@@ -212,7 +233,7 @@ mod tests {
 
     #[test]
     fn test_enqueue_full() {
-        let mut buf = KrabiBuffer::<6>::new(2).unwrap();
+        let buf = KrabiBuffer::<6>::new(2).unwrap();
         let data = [1, 2];
 
         assert!(buf.enqueue(&data).is_ok());
@@ -233,7 +254,7 @@ mod tests {
 
     #[test]
     fn test_invalid_data_length() {
-        let mut buf = KrabiBuffer::<4>::new(2).unwrap();
+        let buf = KrabiBuffer::<4>::new(2).unwrap();
         let data = [1, 2, 3];
         let mut out = [0];
 

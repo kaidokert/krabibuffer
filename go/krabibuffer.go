@@ -70,15 +70,24 @@ func (kb *KrabiBuffer) Tail() uint64 {
 }
 
 // Capacity returns the usable capacity (slot_count - 1).
+// Returns 0 if slot_count < 2.
 func (kb *KrabiBuffer) Capacity() uint64 {
-	return kb.header.SlotCount - 1
+	sc := kb.header.SlotCount
+	if sc < 2 {
+		return 0
+	}
+	return sc - 1
 }
 
 // Len returns the current number of occupied slots.
+// Returns 0 if slot_count < 2.
 func (kb *KrabiBuffer) Len() uint64 {
+	sc := kb.header.SlotCount
+	if sc < 2 {
+		return 0
+	}
 	head := kb.Head()
 	tail := kb.Tail()
-	sc := kb.header.SlotCount
 	return (tail - head + sc) % sc
 }
 
@@ -88,6 +97,10 @@ func (kb *KrabiBuffer) Dequeue(out []byte) int {
 	stride := kb.header.Stride
 	sc := kb.header.SlotCount
 
+	if sc < 2 || stride == 0 {
+		return 0
+	}
+
 	head := atomic.LoadUint64(&kb.header.Head)
 	tail := atomic.LoadUint64(&kb.header.Tail)
 
@@ -95,11 +108,14 @@ func (kb *KrabiBuffer) Dequeue(out []byte) int {
 		return 0
 	}
 
+	if uint64(len(out)) < stride {
+		return 0
+	}
+
 	offset := uintptr(head) * uintptr(stride)
 	src := unsafe.Add(kb.buffer, offset)
 
-	// Copy stride bytes into out
-	for i := uint64(0); i < stride && i < uint64(len(out)); i++ {
+	for i := uint64(0); i < stride; i++ {
 		out[i] = *(*byte)(unsafe.Add(src, uintptr(i)))
 	}
 
@@ -114,6 +130,10 @@ func (kb *KrabiBuffer) Dequeue(out []byte) int {
 func (kb *KrabiBuffer) Enqueue(data []byte) bool {
 	stride := kb.header.Stride
 	sc := kb.header.SlotCount
+
+	if sc < 2 || stride == 0 {
+		return false
+	}
 
 	if uint64(len(data)) != stride {
 		return false

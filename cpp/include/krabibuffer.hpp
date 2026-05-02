@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 
@@ -31,10 +32,20 @@ struct alignas(8) KrabiBuffer
     uint8_t buffer[];
 };
 
+static_assert(sizeof(std::atomic<uint64_t>) == sizeof(uint64_t),
+              "atomic<uint64_t> must be the same size as uint64_t for ABI stability");
+static_assert(offsetof(KrabiBuffer, magic) == 0, "magic must be at offset 0");
+static_assert(offsetof(KrabiBuffer, slot_count) == 8, "slot_count must be at offset 8");
+static_assert(offsetof(KrabiBuffer, stride) == 16, "stride must be at offset 16");
+static_assert(offsetof(KrabiBuffer, head) == 24, "head must be at offset 24");
+static_assert(offsetof(KrabiBuffer, tail) == 32, "tail must be at offset 32");
+
 /// Enqueue `stride` bytes from `data` into the ring buffer.
 /// Returns true on success, false if the queue is full.
 inline bool krabibuffer_enqueue(KrabiBuffer* kb, const void* data)
 {
+    if (!kb || !data || kb->slot_count == 0) return false;
+
     const uint64_t tail = kb->tail.load(std::memory_order_relaxed);
     const uint64_t head = kb->head.load(std::memory_order_acquire);
     const uint64_t next_tail = (tail + 1) % kb->slot_count;
@@ -54,6 +65,8 @@ inline bool krabibuffer_enqueue(KrabiBuffer* kb, const void* data)
 /// Returns true on success, false if the queue is empty.
 inline bool krabibuffer_dequeue(KrabiBuffer* kb, void* out)
 {
+    if (!kb || !out || kb->slot_count == 0) return false;
+
     const uint64_t head = kb->head.load(std::memory_order_relaxed);
     const uint64_t tail = kb->tail.load(std::memory_order_acquire);
 

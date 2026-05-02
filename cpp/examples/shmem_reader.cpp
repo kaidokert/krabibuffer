@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #include "../include/krabibuffer.hpp"
 
@@ -53,8 +54,8 @@ int main(int argc, char** argv)
     std::cout << "head       = " << kb->head.load(std::memory_order_relaxed) << std::endl;
     std::cout << "tail       = " << kb->tail.load(std::memory_order_relaxed) << std::endl;
 
-    uint8_t frame[256];
-    if (krabibuffer_dequeue(kb, frame)) {
+    std::vector<uint8_t> frame(kb->stride);
+    if (krabibuffer_dequeue(kb, frame.data())) {
         std::cout << "Dequeued: ";
         for (uint64_t i = 0; i < kb->stride; ++i) {
             std::cout << (int)frame[i] << " ";

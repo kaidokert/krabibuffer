@@ -12,7 +12,7 @@ const std = @import("std");
 ///   24      8     head  (atomic)
 ///   32      8     tail  (atomic)
 ///   40      N     buffer
-pub const KrabiBuffer = packed struct {
+pub const KrabiBuffer = extern struct {
     magic: u8,
     _pad1: u8 = 0,
     _pad2: u8 = 0,
@@ -39,12 +39,16 @@ pub const KrabiBuffer = packed struct {
     }
 
     /// Usable capacity (slot_count - 1).
+    /// Returns 0 if slot_count < 2.
     pub fn capacity(self: *const KrabiBuffer) u64 {
+        if (self.slot_count < 2) return 0;
         return self.slot_count - 1;
     }
 
     /// Current number of occupied slots.
+    /// Returns 0 if slot_count < 2.
     pub fn len(self: *const KrabiBuffer) u64 {
+        if (self.slot_count < 2) return 0;
         const head = self.loadHead();
         const tail = self.loadTail();
         return (tail -% head +% self.slot_count) % self.slot_count;
@@ -58,6 +62,7 @@ pub const KrabiBuffer = packed struct {
 
     /// Dequeue one slot into `out`. Returns the slice of bytes read, or null if empty.
     pub fn dequeue(self: *KrabiBuffer, out: []u8) ?[]u8 {
+        if (self.slot_count < 2 or self.stride == 0) return null;
         const stride: usize = @intCast(self.stride);
         if (out.len < stride) return null;
 
@@ -80,6 +85,7 @@ pub const KrabiBuffer = packed struct {
 
     /// Enqueue `data` (must be exactly stride bytes). Returns true on success.
     pub fn enqueue(self: *KrabiBuffer, data: []const u8) bool {
+        if (self.slot_count < 2 or self.stride == 0) return false;
         const stride: usize = @intCast(self.stride);
         if (data.len != stride) return false;
 
