@@ -115,9 +115,7 @@ func (kb *KrabiBuffer) Dequeue(out []byte) int {
 	offset := uintptr(head) * uintptr(stride)
 	src := unsafe.Add(kb.buffer, offset)
 
-	for i := uint64(0); i < stride; i++ {
-		out[i] = *(*byte)(unsafe.Add(src, uintptr(i)))
-	}
+	copy(out[:stride], unsafe.Slice((*byte)(src), stride))
 
 	nextHead := (head + 1) % sc
 	atomic.StoreUint64(&kb.header.Head, nextHead)
@@ -149,9 +147,7 @@ func (kb *KrabiBuffer) Enqueue(data []byte) bool {
 	offset := uintptr(tail) * uintptr(stride)
 	dst := unsafe.Add(kb.buffer, offset)
 
-	for i := uint64(0); i < stride; i++ {
-		*(*byte)(unsafe.Add(dst, uintptr(i))) = data[i]
-	}
+	copy(unsafe.Slice((*byte)(dst), stride), data)
 
 	atomic.StoreUint64(&kb.header.Tail, nextTail)
 	return true

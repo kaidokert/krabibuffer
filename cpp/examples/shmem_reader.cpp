@@ -51,8 +51,8 @@ int main(int argc, char** argv)
     std::cout << "magic      = 0x" << std::hex << (int)kb->magic << std::dec << std::endl;
     std::cout << "slot_count = " << kb->slot_count << std::endl;
     std::cout << "stride     = " << kb->stride << std::endl;
-    std::cout << "head       = " << kb->head.load(std::memory_order_relaxed) << std::endl;
-    std::cout << "tail       = " << kb->tail.load(std::memory_order_relaxed) << std::endl;
+    std::cout << "head       = " << std::atomic_ref<uint64_t>(kb->head).load(std::memory_order_relaxed) << std::endl;
+    std::cout << "tail       = " << std::atomic_ref<uint64_t>(kb->tail).load(std::memory_order_relaxed) << std::endl;
 
     std::vector<uint8_t> frame(kb->stride);
     if (krabibuffer_dequeue(kb, frame.data())) {

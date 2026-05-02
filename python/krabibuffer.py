@@ -56,6 +56,13 @@ class KrabiBuffer:
         if stride == 0:
             self._shm.close()
             raise ValueError("invalid stride=0, must be > 0")
+        required = self._OFFSET_BUFFER + slot_count * stride
+        if required > self._shm.size:
+            self._shm.close()
+            raise ValueError(
+                f"shared memory too small: need {required} bytes "
+                f"(header + {slot_count}*{stride}), got {self._shm.size}"
+            )
 
     def close(self):
         """Detach from the shared memory region."""

@@ -171,9 +171,12 @@ impl<const N: usize> Producer<'_, N> {
             let offset = (current_tail * rb.stride) as usize;
             let stride = rb.stride as usize;
             // SAFETY: Producer exclusively owns the slot at `current_tail`.
-            // No other code writes to this region.
+            // No other code writes to this region. Raw pointers are used
+            // to avoid creating references to the full buffer, which would
+            // violate aliasing rules when producer and consumer run concurrently.
             unsafe {
-                (&mut *rb.buffer.get())[offset..(offset + stride)].copy_from_slice(data);
+                let dst = (rb.buffer.get() as *mut u8).add(offset);
+                core::ptr::copy_nonoverlapping(data.as_ptr(), dst, stride);
             }
             rb.tail.store(next_tail, Ordering::Release);
             Ok(())
@@ -216,9 +219,11 @@ impl<const N: usize> Consumer<'_, N> {
             let offset = (current_head * rb.stride) as usize;
             let stride = rb.stride as usize;
             // SAFETY: Consumer exclusively owns the slot at `current_head`.
-            // No other code writes to this region.
+            // No other code writes to this region. Raw pointers avoid
+            // aliasing violations (see enqueue).
             unsafe {
-                out.copy_from_slice(&(&*rb.buffer.get())[offset..(offset + stride)]);
+                let src = (rb.buffer.get() as *const u8).add(offset);
+                core::ptr::copy_nonoverlapping(src, out.as_mut_ptr(), stride);
             }
 
             let next_head = rb.increment(current_head);
