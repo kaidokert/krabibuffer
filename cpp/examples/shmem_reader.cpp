@@ -54,10 +54,16 @@ int main(int argc, char** argv)
     std::cout << "head       = " << std::atomic_ref<uint64_t>(kb->head).load(std::memory_order_relaxed) << std::endl;
     std::cout << "tail       = " << std::atomic_ref<uint64_t>(kb->tail).load(std::memory_order_relaxed) << std::endl;
 
-    std::vector<uint8_t> frame(kb->stride);
+    if (kb->stride == 0 || kb->stride > 64 * 1024 * 1024) {
+        std::cerr << "Invalid stride: " << kb->stride << std::endl;
+        UnmapViewOfFile(addr);
+        CloseHandle(hMap);
+        return 1;
+    }
+    std::vector<uint8_t> frame(static_cast<size_t>(kb->stride));
     if (krabibuffer_dequeue(kb, frame.data())) {
         std::cout << "Dequeued: ";
-        for (uint64_t i = 0; i < kb->stride; ++i) {
+        for (size_t i = 0; i < frame.size(); ++i) {
             std::cout << (int)frame[i] << " ";
         }
         std::cout << std::endl;

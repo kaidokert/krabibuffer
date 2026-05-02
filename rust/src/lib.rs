@@ -34,6 +34,9 @@ pub struct KrabiBuffer<const N: usize> {
     /// Upper nibble is `0xC`, lower nibble encodes `log2(bits) - 3`.
     pub magic: u8,
 
+    /// Explicit padding to match C ABI layout.
+    _padding: [u8; 7],
+
     /// Total number of slots (`N / stride`).
     slot_count: u64,
 
@@ -62,6 +65,15 @@ pub enum Error {
     InvalidDataLength,
 }
 
+const _: () = {
+    assert!(core::mem::offset_of!(KrabiBuffer<4>, magic) == 0);
+    assert!(core::mem::offset_of!(KrabiBuffer<4>, slot_count) == 8);
+    assert!(core::mem::offset_of!(KrabiBuffer<4>, stride) == 16);
+    assert!(core::mem::offset_of!(KrabiBuffer<4>, head) == 24);
+    assert!(core::mem::offset_of!(KrabiBuffer<4>, tail) == 32);
+    assert!(core::mem::offset_of!(KrabiBuffer<4>, buffer) == 40);
+};
+
 impl<const N: usize> KrabiBuffer<N> {
     /// Create a new buffer.
     ///
@@ -83,6 +95,7 @@ impl<const N: usize> KrabiBuffer<N> {
         Ok(Self {
             // Lower nibble encodes pointer width: 0..3 for 8/16/32/64.
             magic: 0xC0 | (usize::BITS.trailing_zeros() - 3) as u8,
+            _padding: [0; 7],
 
             slot_count,
             stride: stride as u64,
