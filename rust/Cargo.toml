@@ -1,0 +1,13 @@
+[workspace]
+
+[package]
+name = "krabibuffer"
+version = "0.1.0"
+edition = "2021"
+description = "A lock-free, no_std, cross-language ring buffer with a stable C ABI memory layout"
+license = "Apache-2.0"
+
+[dependencies]
+
+[features]
+std = []
